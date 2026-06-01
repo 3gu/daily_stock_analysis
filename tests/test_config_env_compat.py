@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.config import Config, setup_env
+from src.config import Config, DEFAULT_ALPHASIFT_INSTALL_SPEC, setup_env
 
 
 class ConfigEnvCompatibilityTestCase(unittest.TestCase):
@@ -50,6 +50,47 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
             config.realtime_source_priority,
             "tencent,akshare_sina,efinance,akshare_em",
         )
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_load_from_env_uses_stable_fundamental_timeout_defaults(
+        self, _mock_parse_litellm_yaml, _mock_setup_env
+    ):
+        with patch.dict(
+            os.environ,
+            {
+                "STOCK_LIST": "600519",
+            },
+            clear=True,
+        ):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.fundamental_stage_timeout_seconds, 8.0)
+        self.assertEqual(config.fundamental_fetch_timeout_seconds, 3.0)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_alphasift_install_spec_defaults_only_when_env_missing(
+        self, _mock_parse_litellm_yaml, _mock_setup_env
+    ):
+        with patch.dict(os.environ, {"STOCK_LIST": "600519"}, clear=True):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.alphasift_install_spec, DEFAULT_ALPHASIFT_INSTALL_SPEC)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_alphasift_install_spec_honors_explicit_empty(
+        self, _mock_parse_litellm_yaml, _mock_setup_env
+    ):
+        with patch.dict(
+            os.environ,
+            {"STOCK_LIST": "600519", "ALPHASIFT_INSTALL_SPEC": ""},
+            clear=True,
+        ):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.alphasift_install_spec, "")
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
@@ -226,6 +267,40 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
                 config = Config._load_from_env()
 
         self.assertEqual(config.report_language, "en")
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_report_show_llm_model_defaults_true_and_can_be_disabled(
+        self,
+        _mock_parse_yaml,
+        _mock_setup_env,
+    ) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = Config._load_from_env()
+        self.assertTrue(config.report_show_llm_model)
+
+        with patch.dict(os.environ, {"REPORT_SHOW_LLM_MODEL": "false"}, clear=True):
+            config = Config._load_from_env()
+        self.assertFalse(config.report_show_llm_model)
+
+        with patch.dict(os.environ, {"REPORT_SHOW_LLM_MODEL": ""}, clear=True):
+            config = Config._load_from_env()
+        self.assertFalse(config.report_show_llm_model)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_market_review_color_scheme_defaults_and_accepts_red_up(
+        self,
+        _mock_parse_yaml,
+        _mock_setup_env,
+    ) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = Config._load_from_env()
+        self.assertEqual(config.market_review_color_scheme, "green_up")
+
+        with patch.dict(os.environ, {"MARKET_REVIEW_COLOR_SCHEME": "red-up"}, clear=True):
+            config = Config._load_from_env()
+        self.assertEqual(config.market_review_color_scheme, "red_up")
 
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
     def test_runtime_mutable_keys_reload_from_updated_env_file_after_runtime_refresh(
