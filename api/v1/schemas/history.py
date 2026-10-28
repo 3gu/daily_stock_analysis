@@ -11,9 +11,11 @@
 
 from typing import Optional, List, Any, Dict, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from api.v1.schemas.market_phase import MarketPhaseSummary
+from api.v1.schemas.research_artifact import ResearchArtifact
+from src.schemas.decision_action import DecisionAction
 
 
 class HistoryItem(BaseModel):
@@ -24,6 +26,10 @@ class HistoryItem(BaseModel):
     stock_code: str = Field(..., description="股票代码")
     stock_name: Optional[str] = Field(None, description="股票名称")
     report_type: Optional[str] = Field(None, description="报告类型")
+    region: Optional[str] = Field(
+        None,
+        description="大盘复盘实际执行的 canonical 市场范围",
+    )
     trend_prediction: Optional[str] = Field(None, description="趋势预测")
     analysis_summary: Optional[str] = Field(None, description="分析摘要")
     sentiment_score: Optional[int] = Field(
@@ -31,6 +37,8 @@ class HistoryItem(BaseModel):
         description="情绪评分（历史数据可能超出 0-100 范围，读取时不做约束）",
     )
     operation_advice: Optional[str] = Field(None, description="操作建议")
+    action: Optional[DecisionAction] = Field(None, description="结构化建议动作 taxonomy")
+    action_label: Optional[str] = Field(None, description="建议动作展示标签")
     current_price: Optional[float] = Field(None, description="分析时股价")
     change_pct: Optional[float] = Field(None, description="分析时涨跌幅(%)")
     volume_ratio: Optional[float] = Field(None, description="分析时量比")
@@ -39,8 +47,16 @@ class HistoryItem(BaseModel):
         None,
         description="分析历史记录中的模型快照，仅用于展示历史元数据；不参与模型配置或运行时路由决策",
     )
+    market_phase_summary: Optional[MarketPhaseSummary] = Field(
+        None,
+        description="本次分析市场阶段低敏摘要",
+    )
     created_at: Optional[str] = Field(None, description="创建时间")
-    
+    asset_type: Optional[Literal["stock", "index"]] = Field(
+        None,
+        description="后端权威资产类型（stock/index）；由持久化代码经 parser 生成。旧客户端与 market review 可缺省。",
+    )
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "id": 1234,
@@ -57,12 +73,12 @@ class HistoryItem(BaseModel):
 
 class HistoryListResponse(BaseModel):
     """历史记录列表响应"""
-    
+
     total: int = Field(..., description="总记录数")
     page: int = Field(..., description="当前页码")
     limit: int = Field(..., description="每页数量")
     items: List[HistoryItem] = Field(default_factory=list, description="记录列表")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "total": 100,
@@ -125,25 +141,31 @@ class ReportMeta(BaseModel):
     stock_code: str = Field(..., description="股票代码")
     stock_name: Optional[str] = Field(None, description="股票名称")
     report_type: Optional[str] = Field(None, description="报告类型")
-    report_language: Optional[str] = Field(None, description="报告输出语言（zh/en）")
+    report_language: Optional[str] = Field(None, description="报告输出语言（zh/en/ko）")
     created_at: Optional[str] = Field(None, description="创建时间")
     current_price: Optional[float] = Field(None, description="分析时股价")
     change_pct: Optional[float] = Field(None, description="分析时涨跌幅(%)")
     model_used: Optional[str] = Field(
         None,
-        description="历史报告元数据中的模型快照，仅用于展示，不影响 Provider/Model/Base URL 运行时路由",
+        description="历史报告元数据中的模型快照，仅用于展示；不参与运行时模型调用路径或配置路由",
     )
     market_phase_summary: Optional[MarketPhaseSummary] = Field(
         None,
         description="本次分析市场阶段低敏摘要",
     )
+    asset_type: Optional[Literal["stock", "index"]] = Field(
+        None,
+        description="后端权威资产类型（stock/index）；指数报告用于隐藏 stock-only 自选操作。market review 与旧客户端可缺省。",
+    )
 
 
 class ReportSummary(BaseModel):
     """报告概览区"""
-    
+
     analysis_summary: Optional[str] = Field(None, description="关键结论")
     operation_advice: Optional[str] = Field(None, description="操作建议")
+    action: Optional[DecisionAction] = Field(None, description="结构化建议动作 taxonomy")
+    action_label: Optional[str] = Field(None, description="建议动作展示标签")
     trend_prediction: Optional[str] = Field(None, description="趋势预测")
     sentiment_score: Optional[int] = Field(
         None,
@@ -154,7 +176,7 @@ class ReportSummary(BaseModel):
 
 class ReportStrategy(BaseModel):
     """策略点位区"""
-    
+
     ideal_buy: Optional[str] = Field(None, description="理想买入价")
     secondary_buy: Optional[str] = Field(None, description="第二买入价")
     stop_loss: Optional[str] = Field(None, description="止损价")
@@ -185,6 +207,9 @@ class AnalysisContextPackOverviewBlock(BaseModel):
         "fetch_failed",
     ] = Field(..., description="数据块质量状态")
     source: Optional[str] = Field(None, description="数据来源")
+    timestamp: Optional[str] = Field(None, description="上下文原始时间，可能为抓取时间")
+    provider_timestamp: Optional[str] = Field(None, description="来源记录的观测时间")
+    fetched_at: Optional[str] = Field(None, description="数据抓取时间，不代表观测时间")
     warnings: List[str] = Field(default_factory=list, description="数据块告警码")
     missing_reasons: List[str] = Field(default_factory=list, description="缺失原因")
 
@@ -239,8 +264,12 @@ class AnalysisContextPackOverview(BaseModel):
 
 class ReportDetails(BaseModel):
     """报告详情区"""
-    
+
     news_content: Optional[str] = Field(None, description="新闻摘要")
+    empty_news_disclosure: Optional[str] = Field(
+        None,
+        description="新闻检索未执行或零命中时的用户可见披露",
+    )
     raw_result: Optional[Any] = Field(None, description="原始分析结果（JSON）")
     context_snapshot: Optional[Any] = Field(None, description="分析时上下文快照（JSON）")
     analysis_context_pack_overview: Optional[AnalysisContextPackOverview] = Field(
@@ -251,6 +280,30 @@ class ReportDetails(BaseModel):
     dividend_metrics: Optional[Any] = Field(None, description="结构化分红指标（含 TTM 口径）")
     belong_boards: Optional[Any] = Field(None, description="关联板块列表")
     sector_rankings: Optional[Any] = Field(None, description="板块涨跌榜（结构 {top, bottom}）")
+    concept_rankings: Optional[Any] = Field(None, description="概念板块涨跌榜（结构 {top, bottom}）")
+    market_structure: Optional[Any] = Field(None, description="市场结构上下文（题材层 + 个股位置层）")
+
+    @model_validator(mode="after")
+    def populate_context_derived_details(self) -> "ReportDetails":
+        if self.concept_rankings is None and self.context_snapshot is not None:
+            try:
+                from src.utils.data_processing import extract_board_detail_fields
+
+                extracted = extract_board_detail_fields(self.context_snapshot)
+                self.concept_rankings = extracted.get("concept_rankings")
+            except Exception:
+                self.concept_rankings = None
+        if self.market_structure is None:
+            try:
+                from src.utils.data_processing import extract_market_structure_detail_field
+
+                self.market_structure = extract_market_structure_detail_field(
+                    self.context_snapshot,
+                    self.raw_result,
+                )
+            except Exception:
+                self.market_structure = None
+        return self
 
 
 class AnalysisReport(BaseModel):
@@ -260,6 +313,10 @@ class AnalysisReport(BaseModel):
     summary: ReportSummary = Field(..., description="概览区")
     strategy: Optional[ReportStrategy] = Field(None, description="策略点位区")
     details: Optional[ReportDetails] = Field(None, description="详情区")
+    structured_report: Optional[ResearchArtifact] = Field(
+        None,
+        description="结构化研究产物，供看板、个股研究页、监控和 Copilot 复用",
+    )
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -299,6 +356,69 @@ class MarkdownReportResponse(BaseModel):
             "content": "# 📊 贵州茅台 (600519) 分析报告\n\n> 分析日期：**2024-01-01**\n\n..."
         }
     })
+
+
+class StockBarItem(BaseModel):
+    """个股栏条目（去重后的股票维度摘要）"""
+
+    id: int = Field(..., description="该股最新一次分析的历史记录主键 ID")
+    stock_code: str = Field(..., description="股票代码")
+    stock_name: Optional[str] = Field(None, description="股票名称")
+    report_type: Optional[str] = Field(None, description="报告类型")
+    sentiment_score: Optional[int] = Field(
+        None,
+        description="最新情绪评分",
+    )
+    operation_advice: Optional[str] = Field(None, description="最新操作建议")
+    action: Optional[DecisionAction] = Field(None, description="结构化建议动作 taxonomy")
+    action_label: Optional[str] = Field(None, description="建议动作展示标签")
+    analysis_count: int = Field(..., description="该股票的历史分析总次数")
+    last_analysis_time: Optional[str] = Field(None, description="最近一次分析时间")
+    model_used: Optional[str] = Field(
+        None,
+        description="最新分析使用的模型快照，仅用于列表展示；不改动运行时调用与配置路径",
+    )
+    market_phase_summary: Optional[MarketPhaseSummary] = Field(
+        None,
+        description="最新分析市场阶段低敏摘要",
+    )
+    asset_type: Optional[Literal["stock", "index"]] = Field(
+        None,
+        description="后端权威资产类型（stock/index）；由持久化代码经 parser 生成。旧客户端可缺省。",
+    )
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "id": 1234,
+            "stock_code": "600519",
+            "stock_name": "贵州茅台",
+            "report_type": "detailed",
+            "sentiment_score": 75,
+            "operation_advice": "持有",
+            "analysis_count": 18,
+            "last_analysis_time": "2024-01-01T12:00:00",
+            "model_used": "Gemini 2.5 Pro",
+        }
+    })
+
+
+class StockBarResponse(BaseModel):
+    """个股栏列表响应"""
+
+    total: int = Field(..., description="不重复个股数")
+    items: List[StockBarItem] = Field(default_factory=list, description="个股列表")
+
+
+class WatchlistRequest(BaseModel):
+    """自选队列操作请求"""
+
+    stock_code: str = Field(..., description="股票代码", min_length=1)
+
+
+class WatchlistResponse(BaseModel):
+    """自选队列响应"""
+
+    stock_codes: List[str] = Field(default_factory=list, description="当前自选队列股票代码列表")
+    message: str = Field(..., description="操作结果描述")
 
 
 class RunDiagnosticComponent(BaseModel):
